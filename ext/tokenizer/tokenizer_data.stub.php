@@ -639,6 +639,11 @@ const T_NULLSAFE_OBJECT_OPERATOR = UNKNOWN;
 const T_DOUBLE_ARROW = UNKNOWN;
 /**
  * @var int
+ * @cvalue T_WHERE
+ */
+const T_WHERE = UNKNOWN;
+/**
+ * @var int
  * @cvalue T_COMMENT
  */
 const T_COMMENT = UNKNOWN;

@@ -216,6 +216,7 @@ static YYSIZE_T zend_yytnamerr(char*, const char*);
 %token T_OBJECT_OPERATOR "'->'"
 %token T_NULLSAFE_OBJECT_OPERATOR "'?->'"
 %token T_DOUBLE_ARROW    "'=>'"
+%token T_WHERE           "where"
 %token T_COMMENT         "comment"
 %token T_DOC_COMMENT     "doc comment"
 %token T_OPEN_TAG        "open tag"
@@ -273,7 +274,7 @@ static YYSIZE_T zend_yytnamerr(char*, const char*);
 %type <ast> array_pair non_empty_array_pair_list array_pair_list possible_array_pair
 %type <ast> isset_variable type return_type type_expr type_without_static
 %type <ast> identifier type_expr_without_static union_type_without_static_element union_type_without_static intersection_type_without_static
-%type <ast> inline_function union_type_element union_type intersection_type
+%type <ast> inline_function union_type_element union_type intersection_type where_expr
 %type <ast> attributed_statement attributed_class_statement attributed_parameter
 %type <ast> attribute_decl attribute attributes attribute_group namespace_declaration_name
 %type <ast> match match_arm_list non_empty_match_arm_list match_arm match_arm_cond_list
@@ -1270,6 +1271,11 @@ inline_function:
 			{ $$ = zend_ast_create_decl(ZEND_AST_ARROW_FUNC, $2 | $12, $1, $3,
 				  NULL, $5, NULL, $11, $7, NULL);
 				  CG(extra_fn_flags) = $9; }
+        |       fn returns_ref backup_doc_comment '(' parameter_list ')' return_type
+                T_DOUBLE_ARROW backup_fn_flags backup_lex_pos expr T_WHERE '(' where_expr ')' backup_fn_flags
+                        { $$ = zend_ast_create_decl(ZEND_AST_ARROW_FUNC, $2 | $14, $1, $3,
+                                  ZSTR_INIT_LITERAL("{closure}", 0), $5, NULL, $11, $7, $9);
+                                  CG(extra_fn_flags) = $9; }
 ;
 
 fn:
@@ -1278,6 +1284,10 @@ fn:
 
 function:
 	T_FUNCTION { $$ = CG(zend_lineno); }
+;
+
+where_expr:
+	variable '=' expr { $$ = zend_ast_create(ZEND_AST_WHERE_EXPR, \$1, \$3); }
 ;
 
 backup_doc_comment:
