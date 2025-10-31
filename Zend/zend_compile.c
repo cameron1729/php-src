@@ -7504,8 +7504,11 @@ static void find_implicit_binds_recursively(closure_info *info, zend_ast *ast) {
 			}
 		}
 	} else if (ast->kind == ZEND_AST_ARROW_FUNC) {
-		/* For arrow functions recursively check the expression. */
+		/* For arrow functions recursively check the with clause and expression. */
 		zend_ast_decl *closure_ast = (zend_ast_decl *) ast;
+		if (closure_ast->child[1]) {
+			find_implicit_binds_recursively(info, closure_ast->child[1]);
+		}
 		find_implicit_binds_recursively(info, closure_ast->child[2]);
 	} else if (!zend_ast_is_special(ast)) {
 		uint32_t i, children = zend_ast_get_num_children(ast);
@@ -7515,7 +7518,7 @@ static void find_implicit_binds_recursively(closure_info *info, zend_ast *ast) {
 	}
 }
 
-static void find_implicit_binds(closure_info *info, zend_ast *params_ast, zend_ast *stmt_ast)
+static void find_implicit_binds(closure_info *info, zend_ast *params_ast, zend_ast *stmt_ast, zend_ast *with_ast)
 {
 	zend_ast_list *param_list = zend_ast_get_list(params_ast);
 	uint32_t i;
@@ -7523,12 +7526,128 @@ static void find_implicit_binds(closure_info *info, zend_ast *params_ast, zend_a
 	zend_hash_init(&info->uses, param_list->children, NULL, NULL, 0);
 
 	find_implicit_binds_recursively(info, stmt_ast);
+	if (with_ast) {
+		find_implicit_binds_recursively(info, with_ast);
+	}
 
 	/* Remove variables that are parameters */
 	for (i = 0; i < param_list->children; i++) {
 		zend_ast *param_ast = param_list->child[i];
 		zend_hash_del(&info->uses, zend_ast_get_str(param_ast->child[1]));
 	}
+}
+
+static void zend_arrow_func_check_no_ref(zend_ast *ast)
+{
+	uint32_t i;
+
+	if (!ast) {
+		return;
+	}
+
+	if (ast->kind == ZEND_AST_REF) {
+		CG(zend_lineno) = zend_ast_get_lineno(ast);
+		zend_error_noreturn(E_COMPILE_ERROR,
+			"References are not allowed in arrow function with clause");
+	}
+
+	if (zend_ast_is_list(ast)) {
+		zend_ast_list *list = zend_ast_get_list(ast);
+		for (i = 0; i < list->children; i++) {
+			zend_arrow_func_check_no_ref(list->child[i]);
+		}
+		return;
+	}
+
+	uint32_t children = zend_ast_get_num_children(ast);
+	for (i = 0; i < children; i++) {
+		zend_arrow_func_check_no_ref(ast->child[i]);
+	}
+}
+
+static void zend_arrow_func_check_binding_target(zend_ast *target, HashTable *param_names)
+{
+	switch (target->kind) {
+		case ZEND_AST_VAR: {
+			zend_ast *name_ast = target->child[0];
+
+			if (name_ast->kind != ZEND_AST_ZVAL
+			 || Z_TYPE_P(zend_ast_get_zval(name_ast)) != IS_STRING) {
+				CG(zend_lineno) = zend_ast_get_lineno(target);
+				zend_error_noreturn(E_COMPILE_ERROR,
+					"Arrow function with clause may only assign to simple variables");
+			}
+
+			if (param_names) {
+				zend_string *name = zend_ast_get_str(name_ast);
+				if (zend_hash_exists(param_names, name)) {
+					CG(zend_lineno) = zend_ast_get_lineno(target);
+					zend_error_noreturn(E_COMPILE_ERROR,
+						"Cannot redeclare parameter $%s in arrow function with clause",
+						ZSTR_VAL(name));
+				}
+			}
+			break;
+		}
+		case ZEND_AST_ARRAY: {
+			zend_ast_list *list = zend_ast_get_list(target);
+			uint32_t i;
+
+			for (i = 0; i < list->children; i++) {
+				zend_ast *elem = list->child[i];
+				zend_ast *value;
+
+				if (!elem) {
+					continue;
+				}
+
+				if (elem->kind == ZEND_AST_ARRAY_ELEM) {
+					if (elem->attr & ZEND_ARRAY_ELEMENT_REF) {
+						CG(zend_lineno) = zend_ast_get_lineno(elem);
+						zend_error_noreturn(E_COMPILE_ERROR,
+							"References are not allowed in arrow function with clause");
+					}
+
+					value = elem->child[0];
+					if (!value) {
+						continue;
+					}
+
+					if (value->kind == ZEND_AST_UNPACK) {
+						zend_arrow_func_check_binding_target(value->child[0], param_names);
+					} else {
+						zend_arrow_func_check_binding_target(value, param_names);
+					}
+				} else if (elem->kind == ZEND_AST_UNPACK) {
+					zend_arrow_func_check_binding_target(elem->child[0], param_names);
+				} else {
+					CG(zend_lineno) = zend_ast_get_lineno(elem);
+					zend_error_noreturn(E_COMPILE_ERROR,
+						"Invalid destructuring in arrow function with clause");
+				}
+			}
+			break;
+		}
+		case ZEND_AST_UNPACK:
+			zend_arrow_func_check_binding_target(target->child[0], param_names);
+			break;
+		default:
+			CG(zend_lineno) = zend_ast_get_lineno(target);
+			zend_error_noreturn(E_COMPILE_ERROR,
+				"Arrow function with clause may only assign to variables");
+	}
+}
+
+static void zend_arrow_func_validate_binding(zend_ast *binding_ast, HashTable *param_names)
+{
+	if (binding_ast->kind != ZEND_AST_ASSIGN) {
+		CG(zend_lineno) = zend_ast_get_lineno(binding_ast);
+		zend_error_noreturn(E_COMPILE_ERROR,
+			"Only simple assignments are allowed in arrow function with clause");
+	}
+
+	zend_arrow_func_check_no_ref(binding_ast);
+	zend_arrow_func_check_binding_target(binding_ast->child[0], param_names);
 }
 
 static void compile_implicit_lexical_binds(
@@ -7790,10 +7909,14 @@ static void zend_compile_func_decl(znode *result, zend_ast *ast, bool toplevel) 
 {
 	zend_ast_decl *decl = (zend_ast_decl *) ast;
 	zend_ast *params_ast = decl->child[0];
-	zend_ast *uses_ast = decl->child[1];
+	zend_ast *uses_ast = NULL;
+	zend_ast *with_ast = NULL;
 	zend_ast *stmt_ast = decl->child[2];
 	zend_ast *return_type_ast = decl->child[3];
 	bool is_method = decl->kind == ZEND_AST_METHOD;
+	zend_ast_list *with_list = NULL;
+	bool param_names_initialized = false;
+	HashTable param_names;
 	zend_string *lcname;
 
 	zend_class_entry *orig_class_entry = CG(active_class_entry);
@@ -7821,13 +7944,40 @@ static void zend_compile_func_decl(znode *result, zend_ast *ast, bool toplevel) 
 		op_array->fn_flags |= ZEND_ACC_CLOSURE;
 	}
 
+	if (decl->kind == ZEND_AST_CLOSURE) {
+		uses_ast = decl->child[1];
+	} else if (decl->kind == ZEND_AST_ARROW_FUNC) {
+		with_ast = decl->child[1];
+		with_list = with_ast ? zend_ast_get_list(with_ast) : NULL;
+		if (with_list && with_list->children) {
+			zend_ast_list *param_list = zend_ast_get_list(params_ast);
+			uint32_t i;
+
+			zend_hash_init(&param_names, param_list->children, NULL, NULL, 0);
+			param_names_initialized = true;
+			for (i = 0; i < param_list->children; i++) {
+				zend_ast *param_ast = param_list->child[i];
+				zend_hash_add_empty_element(&param_names, zend_ast_get_str(param_ast->child[1]));
+			}
+
+			for (i = 0; i < with_list->children; i++) {
+				zend_ast *binding_ast = with_list->child[i];
+				if (binding_ast) {
+					zend_arrow_func_validate_binding(binding_ast, &param_names);
+				}
+			}
+		}
+	} else {
+		uses_ast = decl->child[1];
+	}
+
 	if (is_method) {
 		bool has_body = stmt_ast != NULL;
 		lcname = zend_begin_method_decl(op_array, decl->name, has_body);
 	} else {
 		lcname = zend_begin_func_decl(result, op_array, decl, toplevel);
 		if (decl->kind == ZEND_AST_ARROW_FUNC) {
-			find_implicit_binds(&info, params_ast, stmt_ast);
+			find_implicit_binds(&info, params_ast, stmt_ast, with_ast);
 			compile_implicit_lexical_binds(&info, result, op_array);
 		} else if (uses_ast) {
 			zend_compile_closure_binding(result, op_array, uses_ast);
@@ -7902,6 +8052,17 @@ static void zend_compile_func_decl(znode *result, zend_ast *ast, bool toplevel) 
 		}
 	}
 
+	if (decl->kind == ZEND_AST_ARROW_FUNC && with_list && with_list->children) {
+		uint32_t i;
+		for (i = 0; i < with_list->children; i++) {
+			zend_ast *binding_ast = with_list->child[i];
+			if (!binding_ast) {
+				continue;
+			}
+			zend_compile_stmt(binding_ast);
+		}
+	}
+
 	zend_compile_stmt(stmt_ast);
 
 	if (is_method) {
@@ -7935,6 +8096,10 @@ static void zend_compile_func_decl(znode *result, zend_ast *ast, bool toplevel) 
 
 	CG(active_op_array) = orig_op_array;
 	CG(active_class_entry) = orig_class_entry;
+
+	if (param_names_initialized) {
+		zend_hash_destroy(&param_names);
+	}
 }
 /* }}} */
 

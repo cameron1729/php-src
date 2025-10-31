@@ -146,6 +146,7 @@ static YYSIZE_T zend_yytnamerr(char*, const char*);
 %token <ident> T_FINALLY       "'finally'"
 %token <ident> T_THROW         "'throw'"
 %token <ident> T_USE           "'use'"
+%token <ident> T_WITH          "'with'"
 %token <ident> T_INSTEADOF     "'insteadof'"
 %token <ident> T_GLOBAL        "'global'"
 %token <ident> T_STATIC        "'static'"
@@ -273,7 +274,7 @@ static YYSIZE_T zend_yytnamerr(char*, const char*);
 %type <ast> array_pair non_empty_array_pair_list array_pair_list possible_array_pair
 %type <ast> isset_variable type return_type type_expr type_without_static
 %type <ast> identifier type_expr_without_static union_type_without_static_element union_type_without_static intersection_type_without_static
-%type <ast> inline_function union_type_element union_type intersection_type
+%type <ast> inline_function arrow_function_with_clause arrow_function_binding_list arrow_function_binding union_type_element union_type intersection_type
 %type <ast> attributed_statement attributed_class_statement attributed_parameter
 %type <ast> attribute_decl attribute attributes attribute_group namespace_declaration_name
 %type <ast> match match_arm_list non_empty_match_arm_list match_arm match_arm_cond_list
@@ -1265,11 +1266,11 @@ inline_function:
 			{ $$ = zend_ast_create_decl(ZEND_AST_CLOSURE, $2 | $13, $1, $3,
 				  NULL,
 				  $5, $7, $11, $8, NULL); CG(extra_fn_flags) = $9; }
-	|	fn returns_ref backup_doc_comment '(' parameter_list ')' return_type
+	|	fn returns_ref backup_doc_comment '(' parameter_list ')' return_type arrow_function_with_clause
 		T_DOUBLE_ARROW backup_fn_flags backup_lex_pos expr backup_fn_flags
-			{ $$ = zend_ast_create_decl(ZEND_AST_ARROW_FUNC, $2 | $12, $1, $3,
-				  NULL, $5, NULL, $11, $7, NULL);
-				  CG(extra_fn_flags) = $9; }
+			{ $$ = zend_ast_create_decl(ZEND_AST_ARROW_FUNC, $2 | $13, $1, $3,
+				  NULL, $5, $8, $12, $7, NULL);
+				  CG(extra_fn_flags) = $10; }
 ;
 
 fn:
@@ -1310,6 +1311,21 @@ lexical_var_list:
 lexical_var:
 		T_VARIABLE		{ $$ = $1; }
 	|	ampersand T_VARIABLE	{ $$ = $2; $$->attr = ZEND_BIND_REF; }
+;
+
+arrow_function_with_clause:
+		%empty { $$ = NULL; }
+	|	T_WITH '(' ')' { $$ = zend_ast_create_list(0, ZEND_AST_EXPR_LIST); }
+	|	T_WITH '(' arrow_function_binding_list possible_comma ')' { $$ = $3; }
+;
+
+arrow_function_binding_list:
+		arrow_function_binding { $$ = zend_ast_create_list(1, ZEND_AST_EXPR_LIST, $1); }
+	|	arrow_function_binding_list ',' arrow_function_binding { $$ = zend_ast_list_add($1, $3); }
+;
+
+arrow_function_binding:
+		expr { $$ = $1; }
 ;
 
 function_call:

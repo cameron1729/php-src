@@ -299,6 +299,11 @@ const T_THROW = UNKNOWN;
 const T_USE = UNKNOWN;
 /**
  * @var int
+ * @cvalue T_WITH
+ */
+const T_WITH = UNKNOWN;
+/**
+ * @var int
  * @cvalue T_INSTEADOF
  */
 const T_INSTEADOF = UNKNOWN;

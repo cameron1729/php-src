@@ -1795,7 +1795,16 @@ tail_call:
 			smart_str_appendc(str, '(');
 			zend_ast_export_ex(str, decl->child[0], 0, indent);
 			smart_str_appendc(str, ')');
-			zend_ast_export_ex(str, decl->child[1], 0, indent);
+			if (decl->kind == ZEND_AST_ARROW_FUNC) {
+				if (decl->child[1]) {
+					zend_ast_list *with_list = zend_ast_get_list(decl->child[1]);
+					smart_str_appends(str, " with (");
+					zend_ast_export_list(str, with_list, 1, 20, indent);
+					smart_str_appendc(str, ')');
+				}
+			} else {
+				zend_ast_export_ex(str, decl->child[1], 0, indent);
+			}
 			if (decl->child[3]) {
 				smart_str_appends(str, ": ");
 				zend_ast_export_type(str, decl->child[3], indent);
